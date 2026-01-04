@@ -3,5 +3,139 @@
     "label": "TRANSLATE.PLUGIN_CONFIGURATION"
   },
   "sections": [
+    {
+      "id": "section_connection",
+      "element": "section",
+      "label": "TRANSLATE.CONNECTION_CONFIGURATION",
+      "icon": "fa-plug",
+      "onSave": {
+        "type": "controller",
+        "endpoint": "system_hardware/denon_control",
+        "method": "saveConnectionConfig"
+      },
+      "saveButton": {
+        "label": "TRANSLATE.SAVE",
+        "data": [
+          "receiverIP",
+          "receiverPort"
+        ]
+      },
+      "content": [
+        {
+          "id": "receiverIP",
+          "type": "text",
+          "element": "input",
+          "label": "TRANSLATE.RECEIVER_IP",
+          "doc": "TRANSLATE.RECEIVER_IP_DOC",
+          "value": ""
+        },
+        {
+          "id": "receiverPort",
+          "type": "text",
+          "element": "input",
+          "label": "TRANSLATE.RECEIVER_PORT",
+          "doc": "TRANSLATE.RECEIVER_PORT_DOC",
+          "value": "23"
+        }
+      ]
+    },
+    {
+      "id": "section_actions",
+      "element": "section",
+      "label": "TRANSLATE.ACTION_CONFIGURATION",
+      "icon": "fa-wrench",
+      "onSave": {
+        "type": "controller",
+        "endpoint": "system_hardware/denon_control",
+        "method": "saveActionConfig"
+      },
+      "saveButton": {
+        "label": "TRANSLATE.SAVE",
+        "data": [
+          "powerOn",
+          "maxVolume",
+          "standby",
+          "standbyDelay",
+          "setVolume",
+          "setVolumeValue",
+          "setInput",
+          "setInputValue"
+        ]
+      },
+      "content": [
+        {
+          "id": "powerOn",
+          "element": "switch",
+          "label": "TRANSLATE.POWER_ON",
+          "doc": "TRANSLATE.POWER_ON_DOC",
+          "value": true
+        },
+        {
+          "id": "maxVolume",
+          "type": "number",
+          "element": "input",
+          "label": "TRANSLATE.MAX_VOLUME",
+          "doc": "TRANSLATE.MAX_VOLUME_DOC",
+          "value": 98
+        },
+        {
+          "id": "setVolume",
+          "element": "switch",
+          "label": "TRANSLATE.SET_VOLUME",
+          "doc": "TRANSLATE.SET_VOLUME_DOC",
+          "value": false
+        },
+        {
+          "id": "setVolumeValue",
+          "type": "number",
+          "element": "input",
+          "label": "TRANSLATE.SET_VOLUME_VAL",
+          "doc": "TRANSLATE.SET_VOLUME_VAL_DOC",
+          "value": 20,
+          "visibleIf": {
+            "field": "setVolume",
+            "value": true
+          }
+        },
+        {
+          "id": "setInput",
+          "element": "switch",
+          "label": "TRANSLATE.SET_INPUT",
+          "doc": "TRANSLATE.SET_INPUT_DOC",
+          "value": false
+        },
+        {
+          "id": "setInputValue",
+          "type": "text",
+          "element": "input",
+          "label": "TRANSLATE.SET_INPUT_VAL",
+          "doc": "TRANSLATE.SET_INPUT_VAL_DOC",
+          "value": "CD",
+          "visibleIf": {
+            "field": "setInput",
+            "value": true
+          }
+        },
+        {
+          "id": "standby",
+          "element": "switch",
+          "label": "TRANSLATE.STANDBY",
+          "doc": "TRANSLATE.STANDBY_DOC",
+          "value": true
+        },
+        {
+          "id": "standbyDelay",
+          "type": "number",
+          "element": "input",
+          "label": "TRANSLATE.STANDBY_DELAY",
+          "doc": "TRANSLATE.STANDBY_DELAY_DOC",
+          "value": 5,
+          "visibleIf": {
+            "field": "standby",
+            "value": true
+          }
+        }
+      ]
+    }
   ]
 }

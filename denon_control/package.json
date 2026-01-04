@@ -8,11 +8,11 @@
 	},
 	"author": "Jochen Punie",
 	"license": "ISC",
-	"repository": "https://github.com/yourname/yourrepo",
+	"repository": "https://github.com/jpunie/volumio-plugins-sources.git",
 	"volumio_info": {
-		"prettyName": "denon_control",
-		"icon": "fa-lightbulb-o",
-		"plugin_type": "user_interface",
+		"prettyName": "Volumio Denon Control",
+		"icon": "fa-volume-up",
+		"plugin_type": "system_hardware",
 		"architectures": [
 			"amd64",
 			"armhf",
@@ -21,8 +21,9 @@
 		"os": [
 			"buster"
 		],
-		"details": "Lorem ipsum",
-		"changelog": "Lorem ipsum"
+		"has_alsa_contribution": false,
+		"details": "Controls Denon receivers via the local network.",
+		"changelog": "Initial version ported from Onkyo Control."
 	},
 	"engines": {
 		"node": ">=14.15.4 <15.0.0",
@@ -31,6 +32,7 @@
 	"dependencies": {
 		"fs-extra": "^0.28.0",
 		"kew": "^0.7.0",
-		"v-conf": "^1.4.0"
+		"v-conf": "^1.4.0",
+		"socket.io-client": "^1.4.8"
 	}
 }

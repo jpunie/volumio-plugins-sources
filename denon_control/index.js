@@ -5,6 +5,8 @@ var fs=require('fs-extra');
 var config = new (require('v-conf'))();
 var exec = require('child_process').exec;
 var execSync = require('child_process').execSync;
+var io = require('socket.io-client');
+var net = require('net');
 
 
 module.exports = denonControl;
@@ -16,6 +18,15 @@ function denonControl(context) {
 	this.logger = this.context.logger;
 	this.configManager = this.context.configManager;
 
+    this.connectionOptions = {
+        port: 23,
+        host: ''
+    };
+    this.musicState = 'stopped';
+    this.receiverState = 'off';
+    this.volume = 0;
+    this.client = null;
+    this.isConnected = false;
 }
 
 
@@ -25,7 +36,10 @@ denonControl.prototype.onVolumioStart = function()
 	var self = this;
 	var configFile=this.commandRouter.pluginManager.getConfigurationFile(this.context,'config.json');
 	this.config = new (require('v-conf'))();
+    self.logger.debug("DENON-CONTROL: CONFIG FILE: " + configFile);
 	this.config.loadFile(configFile);
+
+    this.load18nStrings();
 
     return libQ.resolve();
 }
@@ -34,9 +48,23 @@ denonControl.prototype.onStart = function() {
     var self = this;
 	var defer=libQ.defer();
 
+    self.socket = io.connect('http://localhost:3000');
 
-	// Once the Plugin has successfull started resolve the promise
+    self.connectionOptions.host = self.config.get('receiverIP');
+    self.connectionOptions.port = parseInt(self.config.get('receiverPort', 23));
+
+    if (self.connectionOptions.host) {
+        self.connect();
+    } else {
+        self.commandRouter.pushToastMessage("info", "No Denon receiver configured. Please manually configure.");
+    }
+
+    self.logger.info("DENON-CONTROL: *********** DENON PLUGIN STARTED ********");
 	defer.resolve();
+
+    self.socket.on('pushState', function (state) {
+        self.handleStateChange(state);
+    });
 
     return defer.promise;
 };
@@ -45,7 +73,15 @@ denonControl.prototype.onStop = function() {
     var self = this;
     var defer=libQ.defer();
 
-    // Once the Plugin has successfull stopped resolve the promise
+    self.logger.info("DENON-CONTROL: *********** DENON PLUGIN STOPPED ********");
+
+    if (self.client) {
+        self.client.destroy();
+        self.client = null;
+        self.isConnected = false;
+    }
+    self.socket.disconnect();
+
     defer.resolve();
 
     return libQ.resolve();
@@ -56,6 +92,123 @@ denonControl.prototype.onRestart = function() {
     // Optional, use if you need it
 };
 
+denonControl.prototype.connect = function () {
+    const self = this;
+
+    if (self.isConnected && self.client) {
+        return;
+    }
+
+    if (!self.connectionOptions.host) {
+        return;
+    }
+
+    self.logger.info(`DENON-CONTROL: Connecting to ${self.connectionOptions.host}:${self.connectionOptions.port}`);
+
+    self.client = new net.Socket();
+
+    self.client.connect(self.connectionOptions.port, self.connectionOptions.host, function() {
+        self.logger.info('DENON-CONTROL: Connected to receiver');
+        self.isConnected = true;
+    });
+
+    self.client.on('data', function(data) {
+        self.logger.debug('DENON-CONTROL: Received: ' + data);
+    });
+
+    self.client.on('close', function() {
+        self.logger.info('DENON-CONTROL: Connection closed');
+        self.isConnected = false;
+        // Optional: Implement reconnect logic here if needed
+    });
+
+    self.client.on('error', function(err) {
+        self.logger.error('DENON-CONTROL: Connection error: ' + err.message);
+        self.isConnected = false;
+    });
+};
+
+denonControl.prototype.sendCommand = function (command) {
+    const self = this;
+
+    if (!self.isConnected || !self.client) {
+        self.logger.warn('DENON-CONTROL: Not connected, trying to connect...');
+        self.connect();
+        // Simple retry logic could be added here, but for now just try to connect for next time
+        return;
+    }
+
+    self.logger.debug(`DENON-CONTROL: Sending command: ${command}`);
+    self.client.write(command + '\r');
+};
+
+denonControl.prototype.handleStateChange = function (state) {
+    const self = this;
+
+    self.logger.debug("DENON-CONTROL: State change: " + state.status);
+
+    if (state.status !== self.musicState) {
+        self.musicState = state.status;
+
+        switch (self.musicState) {
+            case 'play':
+                if (self.receiverState === 'off') {
+                    if (self.config.get('powerOn')) {
+                        self.sendCommand('ZMON');
+                    }
+
+                    if (self.config.get('setVolume')) {
+                        const volume = self.config.get('setVolumeValue', self.config.get('maxVolume', 98));
+                        self.volume = volume;
+                        // Sync Volumio volume
+                        self.socket.emit("volume", self.volume);
+                        
+                        // Denon volume is 0-98. 
+                        let denonVol = Math.min(self.volume, 98);
+                        self.sendCommand('MV' + denonVol);
+                    }
+
+                    if (self.config.get('setInput')) {
+                        const input = self.config.get('setInputValue', 'CD');
+                        self.sendCommand('SI' + input);
+                    }
+
+                    self.receiverState = 'on';
+                }
+                break;
+
+            case 'stop':
+            case 'pause':
+                if (self.config.get('standby', true)) {
+                    if (self.receiverState === 'on') {
+                        setTimeout(() => {
+                            if (self.musicState !== 'play' && self.receiverState === 'on') {
+                                self.receiverState = 'off';
+                                self.sendCommand('ZMOFF');
+                            }
+                        }, self.config.get('standbyDelay') * 1000);
+                    }
+                }
+                break;
+        }
+    } else {
+        // Volume change handling
+        if (self.receiverState === 'on' && self.volume !== state.volume) {
+            const maxVolume = self.config.get('maxVolume', 98);
+            self.volume = (state.volume) > maxVolume ? maxVolume : state.volume;
+            
+            let denonVol = Math.min(self.volume, 98);
+            self.sendCommand('MV' + denonVol);
+        }
+    }
+};
+
+denonControl.prototype.refreshUIConfig = function() {
+    let self = this;
+    self.commandRouter.getUIConfigOnPlugin('system_hardware', 'denon_control', {}).then( config => {
+        self.commandRouter.broadcastMessage('pushUiConfig', config);
+    });
+}
 
 // Configuration Methods -----------------------------------------------------------------------------
 
@@ -70,7 +223,19 @@ denonControl.prototype.getUIConfig = function() {
         __dirname + '/UIConfig.json')
         .then(function(uiconf)
         {
+            // Connection Section
+            uiconf.sections[0].content[0].value = self.config.get('receiverIP');
+            uiconf.sections[0].content[1].value = self.config.get('receiverPort', 23);
 
+            // Actions Section
+            uiconf.sections[1].content[0].value = self.config.get('powerOn');
+            uiconf.sections[1].content[1].value = self.config.get('maxVolume');
+            uiconf.sections[1].content[2].value = self.config.get('setVolume');
+            uiconf.sections[1].content[3].value = self.config.get('setVolumeValue');
+            uiconf.sections[1].content[4].value = self.config.get('setInput');
+            uiconf.sections[1].content[5].value = self.config.get('setInputValue');
+            uiconf.sections[1].content[6].value = self.config.get('standby');
+            uiconf.sections[1].content[7].value = self.config.get('standbyDelay');
 
             defer.resolve(uiconf);
         })
@@ -80,6 +245,70 @@ denonControl.prototype.getUIConfig = function() {
         });
 
     return defer.promise;
+};
+denonControl.prototype.saveConnectionConfig = function (data) {
+    var self = this;
+
+    self.config.set('receiverIP', data['receiverIP']);
+    self.config.set('receiverPort', data['receiverPort']);
+
+    self.connectionOptions.host = data['receiverIP'];
+    self.connectionOptions.port = parseInt(data['receiverPort']);
+
+    // Reconnect with new settings
+    if (self.client) {
+        self.client.destroy();
+        self.client = null;
+        self.isConnected = false;
+    }
+    self.connect();
+
+    self.commandRouter.pushToastMessage('success', self.getI18nString("SETTINGS_SAVED"), self.getI18nString("SETTINGS_SAVED_CONNECTION"));
+    self.refreshUIConfig();
+
+    return 1;
+};
+
+denonControl.prototype.saveActionConfig = function (data) {
+    var self = this;
+
+    self.config.set('powerOn', data['powerOn']);
+    self.config.set('maxVolume', parseInt(data['maxVolume']));
+    self.config.set('setVolume', data['setVolume']);
+    self.config.set('setVolumeValue', parseInt(data['setVolumeValue']));
+    self.config.set('setInput', data['setInput']);
+    self.config.set('setInputValue', data['setInputValue']);
+    self.config.set('standby', data['standby']);
+    self.config.set('standbyDelay', parseInt(data['standbyDelay']));
+
+    self.commandRouter.pushToastMessage('success', self.getI18nString("SETTINGS_SAVED"), self.getI18nString("SETTINGS_SAVED_ACTION"));
+
+    return 1;
+};
+
+denonControl.prototype.load18nStrings = function () {
+    var self = this;
+
+    try {
+        var language_code = this.commandRouter.sharedVars.get('language_code');
+        self.i18nStrings = fs.readJsonSync(__dirname + '/i18n/strings_' + language_code + ".json");
+    }
+    catch (e) {
+        self.i18nStrings = fs.readJsonSync(__dirname + '/i18n/strings_en.json');
+    }
+
+    self.i18nStringsDefaults = fs.readJsonSync(__dirname + '/i18n/strings_en.json');
+};
+
+denonControl.prototype.getI18nString = function (key) {
+    var self = this;
+
+    if (self.i18nStrings[key] !== undefined) {
+        return self.i18nStrings[key];
+    }
+    else {
+        return self.i18nStringsDefaults[key];
+    }
 };
 
 denonControl.prototype.getConfigurationFiles = function() {
@@ -174,13 +403,13 @@ denonControl.prototype.parseState = function(sState) {
 	//Use this method to parse the state and eventually send it with the following function
 };
 
-// Announce updated State
-denonControl.prototype.pushState = function(state) {
-	var self = this;
-	self.commandRouter.pushConsoleMessage('[' + Date.now() + '] ' + 'denonControl::pushState');
+// // Announce updated State
+// denonControl.prototype.pushState = function(state) {
+// 	var self = this;
+// 	self.commandRouter.pushConsoleMessage('[' + Date.now() + '] ' + 'denonControl::pushState');
 
-	return self.commandRouter.servicePushState(state, self.servicename);
-};
+// 	return self.commandRouter.servicePushState(state, self.servicename);
+// };
 
 
 denonControl.prototype.explodeUri = function(uri) {
