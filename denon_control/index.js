@@ -1,7 +1,7 @@
 'use strict';
 
 var libQ = require('kew');
-var fs=require('fs-extra');
+var fs = require('fs-extra');
 var config = new (require('v-conf'))();
 var exec = require('child_process').exec;
 var execSync = require('child_process').execSync;
@@ -11,12 +11,12 @@ var net = require('net');
 
 module.exports = denonControl;
 function denonControl(context) {
-	var self = this;
+    var self = this;
 
-	this.context = context;
-	this.commandRouter = this.context.coreCommand;
-	this.logger = this.context.logger;
-	this.configManager = this.context.configManager;
+    this.context = context;
+    this.commandRouter = this.context.coreCommand;
+    this.logger = this.context.logger;
+    this.configManager = this.context.configManager;
 
     this.connectionOptions = {
         port: 23,
@@ -29,24 +29,21 @@ function denonControl(context) {
     this.isConnected = false;
 }
 
-
-
-denonControl.prototype.onVolumioStart = function()
-{
-	var self = this;
-	var configFile=this.commandRouter.pluginManager.getConfigurationFile(this.context,'config.json');
-	this.config = new (require('v-conf'))();
+denonControl.prototype.onVolumioStart = function () {
+    var self = this;
+    var configFile = this.commandRouter.pluginManager.getConfigurationFile(this.context, 'config.json');
+    this.config = new (require('v-conf'))();
     self.logger.debug("DENON-CONTROL: CONFIG FILE: " + configFile);
-	this.config.loadFile(configFile);
+    this.config.loadFile(configFile);
 
     this.load18nStrings();
 
     return libQ.resolve();
 }
 
-denonControl.prototype.onStart = function() {
+denonControl.prototype.onStart = function () {
     var self = this;
-	var defer=libQ.defer();
+    var defer = libQ.defer();
 
     self.running = true;
     self.socket = io.connect('http://localhost:3000');
@@ -61,7 +58,7 @@ denonControl.prototype.onStart = function() {
     }
 
     self.logger.info("DENON-CONTROL: *********** DENON PLUGIN STARTED ********");
-	defer.resolve();
+    defer.resolve();
 
     self.socket.on('pushState', function (state) {
         self.handleStateChange(state);
@@ -70,9 +67,9 @@ denonControl.prototype.onStart = function() {
     return defer.promise;
 };
 
-denonControl.prototype.onStop = function() {
+denonControl.prototype.onStop = function () {
     var self = this;
-    var defer=libQ.defer();
+    var defer = libQ.defer();
 
     self.running = false;
     self.logger.info("DENON-CONTROL: *********** DENON PLUGIN STOPPED ********");
@@ -89,7 +86,7 @@ denonControl.prototype.onStop = function() {
     return libQ.resolve();
 };
 
-denonControl.prototype.onRestart = function() {
+denonControl.prototype.onRestart = function () {
     var self = this;
     // Optional, use if you need it
 };
@@ -109,47 +106,50 @@ denonControl.prototype.connect = function () {
 
     self.client = new net.Socket();
 
-    self.client.connect(self.connectionOptions.port, self.connectionOptions.host, function() {
+    self.client.connect(self.connectionOptions.port, self.connectionOptions.host, function () {
         self.logger.info('DENON-CONTROL: Connected to receiver');
         self.isConnected = true;
         // Request volume on connection
         self.client.write('MV?\r');
     });
 
-    self.client.on('data', function(data) {
-        self.logger.debug('DENON-CONTROL: Received: ' + data);
+    self.client.on('data', function (data) {
         const dataStr = data.toString().trim();
+        self.logger.info('DENON-CONTROL: Received data: ' + dataStr);
         if (dataStr.startsWith('MV') && !dataStr.startsWith('MVMAX')) {
-             let volStr = dataStr.substring(2);
-             // Handle 3 digit volume (e.g. 505 -> 50.5)
-             if (volStr.length === 3) {
-                 volStr = volStr.substring(0, 2);
-             }
-             const vol = parseInt(volStr);
-             if (!isNaN(vol)) {
-                 self.logger.info('DENON-CONTROL: Received volume update: ' + vol);
-                 self.volume = vol;
-                 self.commandRouter.volumiosetvolume(vol);
-             }
+            let volStr = dataStr.substring(2, 4);
+            self.logger.debug('DENON-CONTROL: volume data: ' + volStr);
+            var vol = parseInt(volStr);  
+            const maxVolume = self.config.get('maxVolume', 66);
+            if (!isNaN(vol) && vol >= 0 && vol <= maxVolume) {
+                self.logger.info('DENON-CONTROL: Received volume update: ' + vol);
+                self.volume = vol;
+                self.commandRouter.volumiosetvolume(vol);
+            } else {
+                self.logger.error('DENON-CONTROL: Received invalid volume data: ' + volStr);
+            }
         }
     });
 
-    self.client.on('close', function() {
+    self.client.on('close', function () {
         self.logger.info('DENON-CONTROL: Connection closed');
         self.isConnected = false;
+        if (self.client) {
+            self.client.destroy();
+        }
         self.client = null;
-        
+
         if (self.running) {
-             self.logger.info('DENON-CONTROL: Reconnecting in 10s...');
-             setTimeout(() => {
-                 if (self.running) {
-                     self.connect();
-                 }
-             }, 10000);
+            self.logger.info('DENON-CONTROL: Reconnecting in 10s...');
+            setTimeout(() => {
+                if (self.running) {
+                    self.connect();
+                }
+            }, 10000);
         }
     });
 
-    self.client.on('error', function(err) {
+    self.client.on('error', function (err) {
         self.logger.error('DENON-CONTROL: Connection error: ' + err.message);
         self.isConnected = false;
         if (self.client) {
@@ -188,13 +188,19 @@ denonControl.prototype.handleStateChange = function (state) {
                     }
 
                     if (self.config.get('setVolume')) {
-                        const volume = self.config.get('setVolumeValue', self.config.get('maxVolume', 66));
+                        let volume = self.config.get('setVolumeValue', 20);
+                        const maxVolume = self.config.get('maxVolume', 66);
+                        
+                        if (volume > maxVolume) {
+                            volume = maxVolume;
+                        }
+
                         self.volume = volume;
                         // Sync Volumio volume
                         self.socket.emit("volume", self.volume);
-                        
+
                         // Denon volume is 0-66. 
-                        let denonVol = Math.min(self.volume, 66);
+                        let denonVol = Math.min(self.volume, maxVolume);
                         self.sendCommand('MV' + denonVol);
                     }
 
@@ -224,35 +230,34 @@ denonControl.prototype.handleStateChange = function (state) {
     } else {
         // Volume change handling
         if (self.receiverState === 'on' && self.volume !== state.volume) {
-            const maxVolume = self.config.get('maxVolume', 98);
+            const maxVolume = self.config.get('maxVolume', 66);
             self.volume = (state.volume) > maxVolume ? maxVolume : state.volume;
-            
-            let denonVol = Math.min(self.volume, 98);
+
+            let denonVol = Math.min(self.volume, maxVolume);
             self.sendCommand('MV' + denonVol);
         }
     }
 };
 
-denonControl.prototype.refreshUIConfig = function() {
+denonControl.prototype.refreshUIConfig = function () {
     let self = this;
-    self.commandRouter.getUIConfigOnPlugin('system_hardware', 'denon_control', {}).then( config => {
+    self.commandRouter.getUIConfigOnPlugin('system_hardware', 'denon_control', {}).then(config => {
         self.commandRouter.broadcastMessage('pushUiConfig', config);
     });
 }
 
 // Configuration Methods -----------------------------------------------------------------------------
 
-denonControl.prototype.getUIConfig = function() {
+denonControl.prototype.getUIConfig = function () {
     var defer = libQ.defer();
     var self = this;
 
     var lang_code = this.commandRouter.sharedVars.get('language_code');
 
-    self.commandRouter.i18nJson(__dirname+'/i18n/strings_'+lang_code+'.json',
-        __dirname+'/i18n/strings_en.json',
+    self.commandRouter.i18nJson(__dirname + '/i18n/strings_' + lang_code + '.json',
+        __dirname + '/i18n/strings_en.json',
         __dirname + '/UIConfig.json')
-        .then(function(uiconf)
-        {
+        .then(function (uiconf) {
             // Connection Section
             uiconf.sections[0].content[0].value = self.config.get('receiverIP');
             uiconf.sections[0].content[1].value = self.config.get('receiverPort', 23);
@@ -269,8 +274,7 @@ denonControl.prototype.getUIConfig = function() {
 
             defer.resolve(uiconf);
         })
-        .fail(function()
-        {
+        .fail(function () {
             defer.reject(new Error());
         });
 
@@ -341,23 +345,23 @@ denonControl.prototype.getI18nString = function (key) {
     }
 };
 
-denonControl.prototype.getConfigurationFiles = function() {
-	return ['config.json'];
+denonControl.prototype.getConfigurationFiles = function () {
+    return ['config.json'];
 }
 
-denonControl.prototype.setUIConfig = function(data) {
-	var self = this;
-	//Perform your installation tasks here
+denonControl.prototype.setUIConfig = function (data) {
+    var self = this;
+    //Perform your installation tasks here
 };
 
-denonControl.prototype.getConf = function(varName) {
-	var self = this;
-	//Perform your installation tasks here
+denonControl.prototype.getConf = function (varName) {
+    var self = this;
+    //Perform your installation tasks here
 };
 
-denonControl.prototype.setConf = function(varName, varValue) {
-	var self = this;
-	//Perform your installation tasks here
+denonControl.prototype.setConf = function (varName, varValue) {
+    var self = this;
+    //Perform your installation tasks here
 };
 
 
@@ -368,7 +372,7 @@ denonControl.prototype.setConf = function(varName, varValue) {
 
 denonControl.prototype.addToBrowseSources = function () {
 
-	// Use this function to add your music service plugin to music sources
+    // Use this function to add your music service plugin to music sources
     //var data = {name: 'Spotify', uri: 'spotify',plugin_type:'music_service',plugin_name:'spop'};
     this.commandRouter.volumioAddToBrowseSources(data);
 };
@@ -386,51 +390,51 @@ denonControl.prototype.handleBrowseUri = function (curUri) {
 
 
 // Define a method to clear, add, and play an array of tracks
-denonControl.prototype.clearAddPlayTrack = function(track) {
-	var self = this;
-	self.commandRouter.pushConsoleMessage('[' + Date.now() + '] ' + 'denonControl::clearAddPlayTrack');
+denonControl.prototype.clearAddPlayTrack = function (track) {
+    var self = this;
+    self.commandRouter.pushConsoleMessage('[' + Date.now() + '] ' + 'denonControl::clearAddPlayTrack');
 
-	self.commandRouter.logger.info(JSON.stringify(track));
+    self.commandRouter.logger.info(JSON.stringify(track));
 
-	return self.sendSpopCommand('uplay', [track.uri]);
+    return self.sendSpopCommand('uplay', [track.uri]);
 };
 
 denonControl.prototype.seek = function (timepos) {
     this.commandRouter.pushConsoleMessage('[' + Date.now() + '] ' + 'denonControl::seek to ' + timepos);
 
-    return this.sendSpopCommand('seek '+timepos, []);
+    return this.sendSpopCommand('seek ' + timepos, []);
 };
 
 // Stop
-denonControl.prototype.stop = function() {
-	var self = this;
-	self.commandRouter.pushConsoleMessage('[' + Date.now() + '] ' + 'denonControl::stop');
+denonControl.prototype.stop = function () {
+    var self = this;
+    self.commandRouter.pushConsoleMessage('[' + Date.now() + '] ' + 'denonControl::stop');
 
 
 };
 
 // Spop pause
-denonControl.prototype.pause = function() {
-	var self = this;
-	self.commandRouter.pushConsoleMessage('[' + Date.now() + '] ' + 'denonControl::pause');
+denonControl.prototype.pause = function () {
+    var self = this;
+    self.commandRouter.pushConsoleMessage('[' + Date.now() + '] ' + 'denonControl::pause');
 
 
 };
 
 // Get state
-denonControl.prototype.getState = function() {
-	var self = this;
-	self.commandRouter.pushConsoleMessage('[' + Date.now() + '] ' + 'denonControl::getState');
+denonControl.prototype.getState = function () {
+    var self = this;
+    self.commandRouter.pushConsoleMessage('[' + Date.now() + '] ' + 'denonControl::getState');
 
 
 };
 
 //Parse state
-denonControl.prototype.parseState = function(sState) {
-	var self = this;
-	self.commandRouter.pushConsoleMessage('[' + Date.now() + '] ' + 'denonControl::parseState');
+denonControl.prototype.parseState = function (sState) {
+    var self = this;
+    self.commandRouter.pushConsoleMessage('[' + Date.now() + '] ' + 'denonControl::parseState');
 
-	//Use this method to parse the state and eventually send it with the following function
+    //Use this method to parse the state and eventually send it with the following function
 };
 
 // // Announce updated State
@@ -442,48 +446,48 @@ denonControl.prototype.parseState = function(sState) {
 // };
 
 
-denonControl.prototype.explodeUri = function(uri) {
-	var self = this;
-	var defer=libQ.defer();
+denonControl.prototype.explodeUri = function (uri) {
+    var self = this;
+    var defer = libQ.defer();
 
-	// Mandatory: retrieve all info for a given URI
+    // Mandatory: retrieve all info for a given URI
 
-	return defer.promise;
+    return defer.promise;
 };
 
 denonControl.prototype.getAlbumArt = function (data, path) {
 
-	var artist, album;
+    var artist, album;
 
-	if (data != undefined && data.path != undefined) {
-		path = data.path;
-	}
+    if (data != undefined && data.path != undefined) {
+        path = data.path;
+    }
 
-	var web;
+    var web;
 
-	if (data != undefined && data.artist != undefined) {
-		artist = data.artist;
-		if (data.album != undefined)
-			album = data.album;
-		else album = data.artist;
+    if (data != undefined && data.artist != undefined) {
+        artist = data.artist;
+        if (data.album != undefined)
+            album = data.album;
+        else album = data.artist;
 
-		web = '?web=' + nodetools.urlEncode(artist) + '/' + nodetools.urlEncode(album) + '/large'
-	}
+        web = '?web=' + nodetools.urlEncode(artist) + '/' + nodetools.urlEncode(album) + '/large'
+    }
 
-	var url = '/albumart';
+    var url = '/albumart';
 
-	if (web != undefined)
-		url = url + web;
+    if (web != undefined)
+        url = url + web;
 
-	if (web != undefined && path != undefined)
-		url = url + '&';
-	else if (path != undefined)
-		url = url + '?';
+    if (web != undefined && path != undefined)
+        url = url + '&';
+    else if (path != undefined)
+        url = url + '?';
 
-	if (path != undefined)
-		url = url + 'path=' + nodetools.urlEncode(path);
+    if (path != undefined)
+        url = url + 'path=' + nodetools.urlEncode(path);
 
-	return url;
+    return url;
 };
 
 
@@ -491,12 +495,12 @@ denonControl.prototype.getAlbumArt = function (data, path) {
 
 
 denonControl.prototype.search = function (query) {
-	var self=this;
-	var defer=libQ.defer();
+    var self = this;
+    var defer = libQ.defer();
 
-	// Mandatory, search. You can divide the search in sections using following functions
+    // Mandatory, search. You can divide the search in sections using following functions
 
-	return defer.promise;
+    return defer.promise;
 };
 
 denonControl.prototype._searchArtists = function (results) {
@@ -516,11 +520,11 @@ denonControl.prototype._searchTracks = function (results) {
 
 };
 
-denonControl.prototype.goto=function(data){
-    var self=this
-    var defer=libQ.defer()
+denonControl.prototype.goto = function (data) {
+    var self = this
+    var defer = libQ.defer()
 
-// Handle go to artist and go to album function
+    // Handle go to artist and go to album function
 
-     return defer.promise;
+    return defer.promise;
 };
