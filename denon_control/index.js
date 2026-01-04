@@ -48,6 +48,7 @@ denonControl.prototype.onStart = function() {
     var self = this;
 	var defer=libQ.defer();
 
+    self.running = true;
     self.socket = io.connect('http://localhost:3000');
 
     self.connectionOptions.host = self.config.get('receiverIP');
@@ -73,6 +74,7 @@ denonControl.prototype.onStop = function() {
     var self = this;
     var defer=libQ.defer();
 
+    self.running = false;
     self.logger.info("DENON-CONTROL: *********** DENON PLUGIN STOPPED ********");
 
     if (self.client) {
@@ -95,7 +97,7 @@ denonControl.prototype.onRestart = function() {
 denonControl.prototype.connect = function () {
     const self = this;
 
-    if (self.isConnected && self.client) {
+    if (self.client) {
         return;
     }
 
@@ -110,21 +112,49 @@ denonControl.prototype.connect = function () {
     self.client.connect(self.connectionOptions.port, self.connectionOptions.host, function() {
         self.logger.info('DENON-CONTROL: Connected to receiver');
         self.isConnected = true;
+        // Request volume on connection
+        self.client.write('MV?\r');
     });
 
     self.client.on('data', function(data) {
         self.logger.debug('DENON-CONTROL: Received: ' + data);
+        const dataStr = data.toString().trim();
+        if (dataStr.startsWith('MV') && !dataStr.startsWith('MVMAX')) {
+             let volStr = dataStr.substring(2);
+             // Handle 3 digit volume (e.g. 505 -> 50.5)
+             if (volStr.length === 3) {
+                 volStr = volStr.substring(0, 2);
+             }
+             const vol = parseInt(volStr);
+             if (!isNaN(vol)) {
+                 self.logger.info('DENON-CONTROL: Received volume update: ' + vol);
+                 self.volume = vol;
+                 self.commandRouter.volumiosetvolume(vol);
+             }
+        }
     });
 
     self.client.on('close', function() {
         self.logger.info('DENON-CONTROL: Connection closed');
         self.isConnected = false;
-        // Optional: Implement reconnect logic here if needed
+        self.client = null;
+        
+        if (self.running) {
+             self.logger.info('DENON-CONTROL: Reconnecting in 10s...');
+             setTimeout(() => {
+                 if (self.running) {
+                     self.connect();
+                 }
+             }, 10000);
+        }
     });
 
     self.client.on('error', function(err) {
         self.logger.error('DENON-CONTROL: Connection error: ' + err.message);
         self.isConnected = false;
+        if (self.client) {
+            self.client.destroy();
+        }
     });
 };
 
@@ -158,13 +188,13 @@ denonControl.prototype.handleStateChange = function (state) {
                     }
 
                     if (self.config.get('setVolume')) {
-                        const volume = self.config.get('setVolumeValue', self.config.get('maxVolume', 98));
+                        const volume = self.config.get('setVolumeValue', self.config.get('maxVolume', 66));
                         self.volume = volume;
                         // Sync Volumio volume
                         self.socket.emit("volume", self.volume);
                         
-                        // Denon volume is 0-98. 
-                        let denonVol = Math.min(self.volume, 98);
+                        // Denon volume is 0-66. 
+                        let denonVol = Math.min(self.volume, 66);
                         self.sendCommand('MV' + denonVol);
                     }
 
